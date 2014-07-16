@@ -1,0 +1,207 @@
+#!/usr/bin/ruby
+
+# Take queue entries from the specified queue directory and add them to the
+# GDBM database given.
+
+$: << File.expand_path("../../lib", __FILE__)
+
+require 'digest/sha2'
+require 'gdbm'
+require 'json'
+require 'string_extension'
+require 'openssl'
+require 'certificate_transparency'
+require 'merkle-hash-tree'
+require 'redis'
+
+def usage
+	$stderr.puts <<-EOF.gsub(/^\t\t/, '')
+		process_queue -- turn a directory of queue entries into GDBM data.
+
+		Usage:
+		    process_queue <queuedir> <dbfile> <privatekeyfile> [redisurl]
+	EOF
+end
+
+if ARGV.length < 3 or ARGV.length > 4
+	$stderr.puts "Wrong number of arguments\n\n"
+	usage
+	exit 1
+end
+
+###############################
+# Queue dir
+
+unless File.directory?(ARGV[0])
+	$stderr.puts "#{ARGV[0]} isn't a directory"
+	exit 1
+end
+QUEUEDIR = ARGV[0]
+
+###############################
+# DB file
+
+DBFILE = ARGV[1]
+
+unless File.exists? DBFILE
+	# New DB file needs a few values seeded, or else the DAI will have a
+	# conniption when it tries to use the DB.  These values are only really
+	# interesting when the system is being used in master/slave mode.
+	GDBM.open(DBFILE, 0600, GDBM::WRITER|GDBM::WRCREAT) do |db|
+		db['rollover_time'] = "0"
+		db['expiry_time']   = (2**64-1).to_s
+		db['cur_tree_size'] = "0"
+	end
+end
+
+###############################
+# Private key
+
+unless File.exists?(ARGV[2])
+	raise ArgumentError,
+	      "Key file '#{ARGV[2]}' does not exist"
+end
+
+unless File.readable?(ARGV[2])
+	raise ArgumentError,
+	      "Key file '#{ARGV[2]}' is not readable"
+end
+
+PRIVATE_KEY = OpenSSL::PKey.read(File.read(ARGV[2]))
+
+###############################
+# Redis
+#
+# On a large log, having a persistent cache of the hashes in the tree can
+# speed up adding log entries by orders of magnitude.  For example, in a log
+# of 100,000 entries (a fairly small one), calculating the tree head "cold"
+# requires calculating somewhere in the vicinity of 200,000 SHA256 hashes --
+# and even with today's fast processors, that takes time.  Adding one entry
+# to that tree, if the cache is optimally populated, requires only
+# log_2(100,000) (aka 17) hashes to be calculated, rather than the 200,000
+# or so that would be required if there was no cache.
+#
+# In other words, you *really* want to have a Redis instance to talk to for
+# any real-world-sized cache.  It can be setup with no persistence and with
+# whatever maxmemory you're comfortable giving it -- it'll just do the best
+# it can with what its given.
+
+if ARGV[3]
+	REDIS = Redis.new(:url => ARGV[3])
+else
+	REDIS = nil
+end
+
+
+#############################################################################
+# Args are passed... now the fun begins.
+
+# Every log entry in the database has three keys that relate to that
+# one entry.
+#
+# * `le-<num>` -- This is the (0-based) `<num>`th log entry, consisting of a
+#   JSON-encoded object containing the keys `leaf_input` and `chain`.  It's
+#   no surprise that this happens to be very similar to the style of the
+#   entries returned by `/get-entries` -- although that sends back the full
+#   certificate chain, and we only store hashes of the CA certs in the
+#   chain, to save space.
+#
+# * `lh-<hash>` -- A pointer from a v1 leaf hash (encoded as raw octets) to
+#   the entry number which contains the complete log entry with the given
+#   `<hash>`.  Useful for `/get-proof-by-hash` to get back to the entry
+#   itself.
+#
+# * `sct-<hash>` -- The response needed to be sent back in response to an
+#   `/add-chain` or `/add-pre-chain` request for a signed_entry whose SHA256
+#   hash is `<hash>`.  Used to avoid having to issue new SCTs every single
+#   time a given certificate is submitted.
+#
+Dir["#{QUEUEDIR}/*.json"].sort.each do |qent|
+	qdata = File.read(qent)
+	json = JSON.parse(qdata)
+	begin
+		GDBM.open(DBFILE, 0600, GDBM::WRITER) do |db|
+			size = db['cur_tree_size'].to_i
+
+			# If multiple submissions are made for the same certificate in quick
+			# succession, we may have issued multiple SCTs for that cert.  The
+			# protocol requires us to place all of those SCTs in the log, but we
+			# only want one of them -- by convention, the first one we issued --
+			# to be the one we'll send *again* if anyone sends us the same cert
+			# yet again.  Thus, we only store an SCT for a cert if the DB doesn't
+			# already have an SCT for this cert.
+			sct_key = "sct-#{json['sct_hash'].unbase64}"
+			if db[sct_key].nil?
+				db["sct-" + json['sct_hash'].unbase64] = json['sct']
+			end
+
+			hashed_chain = json['chain'].map { |c| Digest::SHA256.digest(c.unbase64).base64 }
+			db["le-#{size}"] = { :leaf_input => json['leaf_input'],
+										:chain      => hashed_chain
+									 }.to_json
+
+			le = CertificateTransparency::LogEntry.new(qdata)
+			# Yes, that leading "\0" is supposed to be in the hash data -- it's
+			# part of the spec for what a "leaf hash" is defined to be.  Thinking
+			# that couldn't *possibly* be right, I checked it against what the
+			# Google pilot/aviator servers do, and lo!  it's exactly how it works.
+			lh = Digest::SHA256.digest("\0" + le.leaf_input.encode)
+			db["lh-#{lh}"] = size.to_s
+
+			size += 1
+			db["cur_tree_size"] = size.to_s
+
+			# *And* we need to make sure all the intermediates are in the DB
+			json['chain'].each do |intermediate|
+				i = intermediate.unbase64
+				ihash = Digest::SHA256.digest(i)
+				if db["i-#{ihash}"].nil?
+					db["i-#{ihash}"] = i
+				end
+			end
+		end
+	rescue Errno::EAGAIN
+		retry
+	end
+
+	File.unlink(qent)
+end
+
+# Now the database has been brought up-to-date, we recalculate the Signed
+# Tree Head, store that, and we're out of here
+dai = CertificateTransparency::DAI.new(DBFILE, REDIS)
+mht = MerkleHashTree.new(dai, Digest::SHA256)
+
+begin
+	tree_size = GDBM.open(DBFILE, 0600, GDBM::READER) { |db| db["cur_tree_size"].to_i }
+rescue Errno::EAGAIN
+	retry
+end
+
+content = { :tree_size => tree_size,
+            :timestamp => (Time.now.to_f * 1000).to_i,
+            :sha256_root_hash => mht.head
+          }
+
+ths = ::CertificateTransparency::TreeHeadSignature.new(
+          content.merge(
+            :version   => CertificateTransparency::Version[:v1]
+          )
+		)
+
+sig = ::TLS::DigitallySigned.new(
+			 :key     => PRIVATE_KEY,
+			 :content => ths.encode
+		  ).encode
+
+content[:tree_head_signature] = sig
+
+[:tree_head_signature, :sha256_root_hash].each do |k|
+	content[k] = content[k].base64
+end
+
+begin
+	GDBM::open(DBFILE, 0600, GDBM::WRITER) { |db| db["cur_sth"] = content.to_json }
+rescue Errno::EAGAIN
+	retry
+end

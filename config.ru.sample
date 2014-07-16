@@ -1,0 +1,24 @@
+load File.expand_path('../lib/init.rb', __FILE__)
+
+require 'certificate_transparency/api/v1'
+
+# Slave setup, read-only, periodically needs resyncs of the GDBM file from
+# the master node
+map "/ct/v1" do
+	run CertificateTransparency::API::V1,
+	    :dai        => CertificateTransparency::DAI.new("#{APP_ROOT}/db/tree.gdb", nil),
+	    :master_url => "https://example.com/master/ct/v1",
+	    :logger     => Logger.new($stderr)
+end
+
+# Master node -- takes writes from slaves, incorporates them into the log,
+# and periodically rebuilds and ships new GDBM files to slaves.  You
+# *cannot* run just a master, because of the way that the GDBM files
+# interoperate.
+map "/master/ct/v1" do
+	run CertificateTransparency::API::V1,
+	    :dai              => CertificateTransparency::DAI.new("#{APP_ROOT}/db/tree.gdb", nil),
+	    :private_key_file => "#{APP_ROOT}/config/key.pem",
+	    :queuedir         => "#{APP_ROOT}/db/queue",
+	    :logger           => Logger.new($stderr)
+end

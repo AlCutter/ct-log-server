@@ -1,0 +1,41 @@
+#!/usr/bin/env ruby
+
+# Add a root certificate to a CT database.
+#
+# Usage:
+#
+#    add_root <certfile> <database>
+#
+
+$: << File.expand_path('../../lib', __FILE__)
+
+require 'json'
+require 'gdbm'
+require 'openssl'
+require 'string_extension'
+
+if ARGV.length != 2
+	$stderr.puts "Incorrect usage"
+	$stderr.puts
+	$stderr.puts "Usage: add_root <certfile> <database>"
+	exit 1
+end
+
+unless File.readable? ARGV[0]
+	$stderr.puts "Cannot read '#{ARGV[0]}'"
+	exit 1
+end
+
+unless File.readable? ARGV[1]
+	$stderr.puts "Cannot read '#{ARGV[1]}'"
+	exit 1
+end
+
+cert = OpenSSL::X509::Certificate.new(File.read(ARGV[0]))
+GDBM.open(ARGV[1], 0600, GDBM::WRITER) do |db|
+	roots = JSON.parse(db["roots"] || "[]")
+	roots << cert.to_der.base64
+	db["roots"] = roots.to_json
+end
+
+puts "Certificate added."

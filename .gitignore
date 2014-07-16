@@ -1,0 +1,9 @@
+/.rspec
+/GETTING-STARTED
+html/
+pkg/
+db/*.db
+/.bundle
+/tmp
+TODO
+/public/_doc
