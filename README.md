@@ -38,3 +38,23 @@ window, to show you what you're breaking as you hack around:
     rake guard
 
 All the specs live in `spec/`.
+
+
+# Licence and copyright statement
+
+Except as otherwise indicated, all code in this git repository is Copyright
+(C) 2014 Matt Palmer, <mpalmer@hezmatt.org>.
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License version 3 as published by
+    the Free Software Foundation.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+The full terms of the GPLv3 are provided in the file LICENCE.
