@@ -271,7 +271,7 @@ class CertificateTransparency::API::V1
 		if second < first
 			return error("first cannot be greater than second")
 		end
-		if second >= @dai.length
+		if second > @dai.length
 			return error("second out of range")
 		end
 		if first < 0
