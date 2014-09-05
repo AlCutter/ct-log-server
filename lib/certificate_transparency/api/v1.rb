@@ -112,7 +112,7 @@ class CertificateTransparency::API::V1
 				error("Cannot use #{env["REQUEST_METHOD"]} on #{env["PATH_INFO"]}", 405)
 			elsif route.length > 1
 				raise RuntimeError,
-						"Got multiple routes for #{env["REQUEST_METHOD"]} #{env["PATH_INFO"]}"
+				      "Got multiple routes for #{env["REQUEST_METHOD"]} #{env["PATH_INFO"]}"
 			else
 				__send__(route[0][2], params)
 			end
