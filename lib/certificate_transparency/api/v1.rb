@@ -233,7 +233,7 @@ class CertificateTransparency::API::V1
 		  :sct        => sct,
 		  :sct_hash   => Digest::SHA256.digest(signed_entry).base64,
 		  :leaf_input => mtl.encode.base64,
-		  :chain      => chain.map { |c| Digest::SHA256.digest(c.to_der).base64 }
+		  :chain      => chain.map { |c| c.to_der.base64 }
 		}.to_json
 
 		begin
