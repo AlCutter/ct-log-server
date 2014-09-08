@@ -39,12 +39,12 @@ describe "DigitallySigned" do
 			expect(ds.encode.encoding.to_s).to eq("ASCII-8BIT")
 		end
 
-		it "sets the signature algorithm correctly" do
-			expect(packet[0]).to eq(3)
+		it "sets the hash algorithm correctly" do
+			expect(packet[0]).to eq(4)
 		end
 
-		it "sets the hash algorithm correctly" do
-			expect(packet[1]).to eq(4)
+		it "sets the signature algorithm correctly" do
+			expect(packet[1]).to eq(3)
 		end
 
 		it "has the correct length" do

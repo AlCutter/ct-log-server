@@ -47,7 +47,7 @@ class TLS::DigitallySigned
 		end
 
 		if @blob
-			sig_alg, hash_alg, len, @sig = @blob.unpack("CCna*")
+			hash_alg, sig_alg, len, @sig = @blob.unpack("CCna*")
 
 			if sig_alg != ::TLS::SignatureAlgorithm[:ecdsa]
 				raise ArgumentError,
@@ -74,8 +74,8 @@ class TLS::DigitallySigned
 		@blob ||= begin
 			@sig = @key.sign(OpenSSL::Digest::SHA256.new, @content)
 
-			[::TLS::SignatureAlgorithm[:ecdsa],
-			 ::TLS::HashAlgorithm[:sha256],
+			[::TLS::HashAlgorithm[:sha256],
+			 ::TLS::SignatureAlgorithm[:ecdsa],
 			 @sig.length,
 			 @sig
 			].pack("CCna*").force_encoding("BINARY")
